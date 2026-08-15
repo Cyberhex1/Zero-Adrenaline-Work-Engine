@@ -83,10 +83,16 @@ export async function saveAppSnapshot(
 
   try {
     const docRef = doc(db, 'users', userId, 'snapshot', 'main');
-    await setDoc(docRef, cleanPayload, { merge: true });
+
+    // Race the Firestore write against a 10-second timeout so we never hang forever
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Firestore write timed out after 10s')), 10000)
+    );
+
+    await Promise.race([setDoc(docRef, cleanPayload, { merge: true }), timeoutPromise]);
     return { success: true, lastUpdated };
   } catch (err: any) {
-    console.error('Firebase saveAppSnapshot error:', err);
+    console.error('Firebase saveAppSnapshot error:', err?.code, err?.message, err);
     return {
       success: false,
       lastUpdated,
@@ -94,6 +100,7 @@ export async function saveAppSnapshot(
     };
   }
 }
+
 
 /**
  * Explicitly fetches the cloud snapshot from Firestore for a given user.
