@@ -315,9 +315,22 @@ export default function App() {
     }
 
     setSyncStatus('syncing');
+
+    // Safety net: if Firestore subscription takes >6s to respond (e.g. first-time user or
+    // slow network), unblock the auto-save effect so it can still run.
+    const loadedFallback = setTimeout(() => {
+      setIsSnapshotLoaded((prev) => {
+        if (!prev) {
+          console.warn('Snapshot load fallback triggered — unblocking auto-save');
+        }
+        return true;
+      });
+    }, 6000);
+
     const unsub = subscribeAppSnapshot(
       authUser.uid,
       async (snapshot) => {
+        clearTimeout(loadedFallback);
         if (snapshot) {
           isRemoteUpdatingRef.current = true;
           if (snapshot.userProfile) setUserProfile({ ...DEFAULT_PROFILE, ...snapshot.userProfile });
@@ -357,14 +370,19 @@ export default function App() {
         }
       },
       (err) => {
+        clearTimeout(loadedFallback);
         console.warn('Snapshot subscription issue:', err);
         setSyncStatus('error');
         setSyncErrorMsg(err.message || 'Subscription error');
         setIsSnapshotLoaded(true);
       }
     );
-    return () => unsub();
+    return () => {
+      clearTimeout(loadedFallback);
+      unsub();
+    };
   }, [authUser]);
+
 
   // Save snapshot continuously when state changes, debounced
   useEffect(() => {
