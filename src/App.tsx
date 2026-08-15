@@ -376,8 +376,9 @@ export default function App() {
       return;
     }
 
-    setSyncStatus('syncing');
+    // Only flip to 'syncing' right before the actual write, not on every render
     const timeout = setTimeout(async () => {
+      setSyncStatus('syncing');
       const res = await saveAppSnapshot(authUser.uid, {
         userProfile,
         todos,
@@ -394,7 +395,7 @@ export default function App() {
         setSyncStatus('error');
         setSyncErrorMsg(res.error || 'Failed to auto-save');
       }
-    }, 1200); // 1.2 second debounce
+    }, 800); // 800ms debounce — fast but not spammy
 
     return () => clearTimeout(timeout);
   }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, battery]);
@@ -1045,8 +1046,9 @@ export default function App() {
           lastSyncedAt={lastSyncedAt}
           onGoogleLogout={async () => {
             await signOut(auth);
-            handleClearAllData();
-            triggerToast('Signed out & Local Data Cleared');
+            // Do NOT wipe local data on sign-out — data stays locally
+            // and will be re-loaded from cloud on next sign-in
+            triggerToast('Signed out. Your local data is preserved.');
           }}
         />
 
