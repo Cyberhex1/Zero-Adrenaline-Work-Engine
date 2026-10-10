@@ -26,6 +26,7 @@ import {
   saveAppSnapshot,
   subscribeAppSnapshot,
   fetchAppSnapshot,
+  AppSnapshot,
 } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
@@ -128,6 +129,17 @@ const DEFAULT_NOTES: NoteItem[] = [
   },
 ];
 
+const loadStored = <T,>(key: string, fallback: T): T => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? (JSON.parse(saved) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+type SyncPayload = Omit<AppSnapshot, 'lastUpdated'>;
+
 const get2amCycleKey = (d: Date = new Date()): string => {
   const dateCopy = new Date(d);
   if (dateCopy.getHours() < 2) {
@@ -143,34 +155,26 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('todo');
 
   const [battery, setBattery] = useState<number>(() => {
-    const saved = localStorage.getItem('zawe_battery');
-    return saved ? parseInt(saved, 10) : 100;
+    const saved = parseInt(localStorage.getItem('zawe_battery') ?? '', 10);
+    return Number.isFinite(saved) ? Math.min(100, Math.max(0, saved)) : 100;
   });
 
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('zawe_profile');
-    return saved ? { ...DEFAULT_PROFILE, ...JSON.parse(saved) } : DEFAULT_PROFILE;
-  });
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => ({
+    ...DEFAULT_PROFILE,
+    ...loadStored<Partial<UserProfile>>('zawe_profile', {}),
+  }));
 
-  const [todos, setTodos] = useState<TodoItem[]>(() => {
-    const saved = localStorage.getItem('zawe_todos');
-    return saved ? JSON.parse(saved) : DEFAULT_TODOS;
-  });
+  const [todos, setTodos] = useState<TodoItem[]>(() => loadStored('zawe_todos', DEFAULT_TODOS));
 
-  const [symptomLogs, setSymptomLogs] = useState<SymptomLog[]>(() => {
-    const saved = localStorage.getItem('zawe_symptoms');
-    return saved ? JSON.parse(saved) : DEFAULT_SYMPTOMS;
-  });
+  const [symptomLogs, setSymptomLogs] = useState<SymptomLog[]>(() =>
+    loadStored('zawe_symptoms', DEFAULT_SYMPTOMS)
+  );
 
-  const [notes, setNotes] = useState<NoteItem[]>(() => {
-    const saved = localStorage.getItem('zawe_notes');
-    return saved ? JSON.parse(saved) : DEFAULT_NOTES;
-  });
+  const [notes, setNotes] = useState<NoteItem[]>(() => loadStored('zawe_notes', DEFAULT_NOTES));
 
-  const [sessionLogs, setSessionLogs] = useState<SessionLog[]>(() => {
-    const saved = localStorage.getItem('zawe_session_logs');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [sessionLogs, setSessionLogs] = useState<SessionLog[]>(() =>
+    loadStored<SessionLog[]>('zawe_session_logs', [])
+  );
 
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [isSnapshotLoaded, setIsSnapshotLoaded] = useState(false);
@@ -178,7 +182,12 @@ export default function App() {
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState<boolean>(false);
-  const isRemoteUpdatingRef = React.useRef<boolean>(false);
+  // Serialized form of the state last known to match the cloud copy. Used to skip
+  // auto-saves for state that just arrived from the cloud (or was just written).
+  const lastSyncedJsonRef = React.useRef<string | null>(null);
+  // Always-current view of the syncable state, for async callbacks with stale closures.
+  const syncStateRef = React.useRef<SyncPayload>({ userProfile, todos, symptomLogs, notes, sessionLogs, battery });
+  syncStateRef.current = { userProfile, todos, symptomLogs, notes, sessionLogs, battery };
 
   const [activeSprintTaskTitle, setActiveSprintTaskTitle] = useState<string>('');
   const [isPanicOpen, setIsPanicOpen] = useState<boolean>(false);
@@ -192,9 +201,45 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isPlayerBarDismissed, setIsPlayerBarDismissed] = useState<boolean>(false);
 
+  const toastTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+    // Restart the timer so an earlier toast's timeout doesn't hide a newer message early
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  // Apply a snapshot received from the cloud and remember it as the synced baseline
+  const applyRemoteSnapshot = (snapshot: AppSnapshot) => {
+    const current = syncStateRef.current;
+    const next: SyncPayload = {
+      userProfile: snapshot.userProfile ? { ...DEFAULT_PROFILE, ...snapshot.userProfile } : current.userProfile,
+      todos: snapshot.todos || current.todos,
+      symptomLogs: snapshot.symptomLogs || current.symptomLogs,
+      notes: snapshot.notes || current.notes,
+      sessionLogs: snapshot.sessionLogs || current.sessionLogs,
+      battery: typeof snapshot.battery === 'number' ? snapshot.battery : current.battery,
+    };
+    lastSyncedJsonRef.current = JSON.stringify(next);
+    setUserProfile(next.userProfile);
+    setTodos(next.todos);
+    setSymptomLogs(next.symptomLogs);
+    setNotes(next.notes);
+    setSessionLogs(next.sessionLogs);
+    setBattery(next.battery);
+    setLastSyncedAt(snapshot.lastUpdated || Date.now());
+    setSyncStatus('synced');
+    setSyncErrorMsg(null);
+  };
+
+  // Write the current state to the cloud and record it as the synced baseline
+  const saveCurrentSnapshot = async (uid: string) => {
+    const payload = syncStateRef.current;
+    const res = await saveAppSnapshot(uid, payload);
+    if (res.success) {
+      lastSyncedJsonRef.current = JSON.stringify(payload);
+    }
+    return res;
   };
 
   // Initialize Auth state listener
@@ -204,6 +249,7 @@ export default function App() {
       if (!user) {
         setSyncStatus('guest');
         setIsSnapshotLoaded(false);
+        lastSyncedJsonRef.current = null;
       }
     });
     return () => unsubscribe();
@@ -231,15 +277,13 @@ export default function App() {
       triggerToast('Please sign in to enable Cloud Sync! ☁️');
       return;
     }
+    if (!isSnapshotLoaded) {
+      // Writing before the cloud copy has loaded would overwrite it with local data
+      triggerToast('Still loading your cloud data — please try again in a moment.');
+      throw new Error('Cloud snapshot is still loading');
+    }
     setSyncStatus('syncing');
-    const res = await saveAppSnapshot(authUser.uid, {
-      userProfile,
-      todos,
-      symptomLogs,
-      notes,
-      sessionLogs,
-      battery,
-    });
+    const res = await saveCurrentSnapshot(authUser.uid);
     if (res.success) {
       setSyncStatus('synced');
       setLastSyncedAt(res.lastUpdated);
@@ -260,20 +304,9 @@ export default function App() {
     try {
       const snapshot = await fetchAppSnapshot(authUser.uid);
       if (snapshot) {
-        isRemoteUpdatingRef.current = true;
-        if (snapshot.userProfile) setUserProfile({ ...DEFAULT_PROFILE, ...snapshot.userProfile });
-        if (snapshot.todos) setTodos(snapshot.todos);
-        if (snapshot.symptomLogs) setSymptomLogs(snapshot.symptomLogs);
-        if (snapshot.notes) setNotes(snapshot.notes);
-        if (snapshot.sessionLogs) setSessionLogs(snapshot.sessionLogs);
-        if (typeof snapshot.battery === 'number') setBattery(snapshot.battery);
-        setLastSyncedAt(snapshot.lastUpdated || Date.now());
-        setSyncStatus('synced');
-        setSyncErrorMsg(null);
+        applyRemoteSnapshot(snapshot);
+        setIsSnapshotLoaded(true);
         triggerToast('Restored state from Cloud Snapshot! ☁️');
-        setTimeout(() => {
-          isRemoteUpdatingRef.current = false;
-        }, 500);
       } else {
         setSyncStatus('synced');
         triggerToast('No cloud snapshot found to restore.');
@@ -290,7 +323,8 @@ export default function App() {
   useEffect(() => {
     const handleOnline = () => {
       if (authUser) {
-        handleForceSync();
+        // Failures are already surfaced via sync status + toast
+        if (isSnapshotLoaded) handleForceSync().catch(() => {});
       } else {
         setSyncStatus('guest');
       }
@@ -304,7 +338,7 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [authUser, userProfile, todos, symptomLogs, notes, sessionLogs, battery]);
+  }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, battery]);
 
   // Load and subscribe to cloud snapshot on Auth change
   useEffect(() => {
@@ -316,15 +350,12 @@ export default function App() {
 
     setSyncStatus('syncing');
 
-    // Safety net: if Firestore subscription takes >6s to respond (e.g. first-time user or
-    // slow network), unblock the auto-save effect so it can still run.
+    // If the cloud is slow to respond (e.g. slow or no network), tell the user rather than
+    // unblocking auto-save: saving before the cloud copy loads would overwrite it with local data.
     const loadedFallback = setTimeout(() => {
-      setIsSnapshotLoaded((prev) => {
-        if (!prev) {
-          console.warn('Snapshot load fallback triggered — unblocking auto-save');
-        }
-        return true;
-      });
+      console.warn('Cloud snapshot is taking a long time to load');
+      setSyncStatus('offline');
+      setSyncErrorMsg('Waiting for cloud data — changes are kept on this device and will sync once connected.');
     }, 6000);
 
     const unsub = subscribeAppSnapshot(
@@ -332,30 +363,11 @@ export default function App() {
       async (snapshot) => {
         clearTimeout(loadedFallback);
         if (snapshot) {
-          isRemoteUpdatingRef.current = true;
-          if (snapshot.userProfile) setUserProfile({ ...DEFAULT_PROFILE, ...snapshot.userProfile });
-          if (snapshot.todos) setTodos(snapshot.todos);
-          if (snapshot.symptomLogs) setSymptomLogs(snapshot.symptomLogs);
-          if (snapshot.notes) setNotes(snapshot.notes);
-          if (snapshot.sessionLogs) setSessionLogs(snapshot.sessionLogs);
-          if (typeof snapshot.battery === 'number') setBattery(snapshot.battery);
-          setLastSyncedAt(snapshot.lastUpdated || Date.now());
-          setSyncStatus('synced');
-          setSyncErrorMsg(null);
+          applyRemoteSnapshot(snapshot);
           setIsSnapshotLoaded(true);
-          setTimeout(() => {
-            isRemoteUpdatingRef.current = false;
-          }, 500);
         } else {
           // First time sign in for this user: automatically migrate existing local guest data to their cloud account!
-          const res = await saveAppSnapshot(authUser.uid, {
-            userProfile,
-            todos,
-            symptomLogs,
-            notes,
-            sessionLogs,
-            battery,
-          });
+          const res = await saveCurrentSnapshot(authUser.uid);
           if (res.success) {
             setSyncStatus('synced');
             setLastSyncedAt(res.lastUpdated);
@@ -387,7 +399,6 @@ export default function App() {
   // Save snapshot continuously when state changes, debounced
   useEffect(() => {
     if (!authUser || !isSnapshotLoaded) return;
-    if (isRemoteUpdatingRef.current) return;
 
     if (!navigator.onLine) {
       setSyncStatus('offline');
@@ -396,15 +407,10 @@ export default function App() {
 
     // Only flip to 'syncing' right before the actual write, not on every render
     const timeout = setTimeout(async () => {
+      // Skip writes for state that already matches the cloud (e.g. a just-applied remote update)
+      if (JSON.stringify(syncStateRef.current) === lastSyncedJsonRef.current) return;
       setSyncStatus('syncing');
-      const res = await saveAppSnapshot(authUser.uid, {
-        userProfile,
-        todos,
-        symptomLogs,
-        notes,
-        sessionLogs,
-        battery,
-      });
+      const res = await saveCurrentSnapshot(authUser.uid);
       if (res.success) {
         setSyncStatus('synced');
         setLastSyncedAt(res.lastUpdated);
@@ -485,23 +491,18 @@ export default function App() {
   };
 
   const handleToggleTodo = (id: string) => {
-    setTodos((prev) =>
-      prev.map((t) => {
-        if (t.id === id) {
-          const nextCompleted = !t.completed;
-          if (nextCompleted) {
-            addXp(30);
-            setUserProfile((p) => ({
-              ...p,
-              totalBitsLogged: (p.totalBitsLogged || 0) + 1,
-            }));
-            triggerToast('+30 XP! Task Completed 🌸');
-          }
-          return { ...t, completed: nextCompleted };
-        }
-        return t;
-      })
-    );
+    const target = todos.find((t) => t.id === id);
+    if (!target) return;
+    const nextCompleted = !target.completed;
+    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, completed: nextCompleted } : t)));
+    if (nextCompleted) {
+      addXp(30);
+      setUserProfile((p) => ({
+        ...p,
+        totalBitsLogged: (p.totalBitsLogged || 0) + 1,
+      }));
+      triggerToast('+30 XP! Task Completed 🌸');
+    }
   };
 
   const handleDeleteTodo = (id: string) => {
@@ -538,29 +539,24 @@ export default function App() {
   };
 
   const handleToggleFocusBit = (todoId: string, bitId: string) => {
+    const bit = todos.find((t) => t.id === todoId)?.focusBits.find((b) => b.id === bitId);
+    if (!bit) return;
+    const next = !bit.completed;
     setTodos((prev) =>
-      prev.map((t) => {
-        if (t.id === todoId) {
-          const updatedBits = t.focusBits.map((b) => {
-            if (b.id === bitId) {
-              const next = !b.completed;
-              if (next) {
-                addXp(15);
-                setUserProfile((p) => ({
-                  ...p,
-                  totalBitsLogged: (p.totalBitsLogged || 0) + 1,
-                }));
-                triggerToast('+15 XP! 1 Focus Bit Completed 🌱');
-              }
-              return { ...b, completed: next };
-            }
-            return b;
-          });
-          return { ...t, focusBits: updatedBits };
-        }
-        return t;
-      })
+      prev.map((t) =>
+        t.id === todoId
+          ? { ...t, focusBits: t.focusBits.map((b) => (b.id === bitId ? { ...b, completed: next } : b)) }
+          : t
+      )
     );
+    if (next) {
+      addXp(15);
+      setUserProfile((p) => ({
+        ...p,
+        totalBitsLogged: (p.totalBitsLogged || 0) + 1,
+      }));
+      triggerToast('+15 XP! 1 Focus Bit Completed 🌱');
+    }
   };
 
   const handleSendToSprint = (taskTitle: string) => {

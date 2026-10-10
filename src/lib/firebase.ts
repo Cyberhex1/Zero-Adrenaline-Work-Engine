@@ -85,11 +85,16 @@ export async function saveAppSnapshot(
     const docRef = doc(db, 'users', userId, 'snapshot', 'main');
 
     // Race the Firestore write against a 10-second timeout so we never hang forever
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Firestore write timed out after 10s')), 10000)
-    );
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('Firestore write timed out after 10s')), 10000);
+    });
 
-    await Promise.race([setDoc(docRef, cleanPayload, { merge: true }), timeoutPromise]);
+    try {
+      await Promise.race([setDoc(docRef, cleanPayload, { merge: true }), timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
     return { success: true, lastUpdated };
   } catch (err: any) {
     console.error('Firebase saveAppSnapshot error:', err?.code, err?.message, err);
@@ -137,9 +142,15 @@ export function subscribeAppSnapshot(
   return onSnapshot(
     docRef,
     (docSnap) => {
+      // Local (latency-compensated) echoes of our own writes are not remote updates;
+      // re-applying them would clobber edits made while the write was in flight.
+      const { hasPendingWrites, fromCache } = docSnap.metadata;
+      if (hasPendingWrites) return;
       if (docSnap.exists()) {
         onUpdate(docSnap.data() as AppSnapshot);
-      } else {
+      } else if (!fromCache) {
+        // Only trust "no snapshot" when the server confirmed it. A cache miss while
+        // offline would otherwise look like a brand-new account and overwrite cloud data.
         onUpdate(null);
       }
     },
