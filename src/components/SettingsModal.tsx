@@ -327,6 +327,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       userProfile: currentProfile,
       todos: JSON.parse(localStorage.getItem('zawe_todos') || '[]'),
       symptomLogs: JSON.parse(localStorage.getItem('zawe_symptoms') || '[]'),
+      medications: JSON.parse(localStorage.getItem('zawe_medications') || '[]'),
       notes: JSON.parse(localStorage.getItem('zawe_notes') || '[]'),
       sessionLogs: JSON.parse(localStorage.getItem('zawe_session_logs') || '[]'),
       battery: parseInt(localStorage.getItem('zawe_battery') || '100', 10),

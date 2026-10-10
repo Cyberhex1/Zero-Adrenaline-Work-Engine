@@ -48,6 +48,16 @@ export interface UserProfile {
   isPlayingMusic?: boolean;
   musicVolume?: number;
   currentYoutubeUrl?: string;
+  // Analytics history, keyed by local day ("YYYY-MM-DD")
+  dailyBits?: Record<string, number>;
+  dailyEnergy?: Record<string, number>;
+}
+
+export interface MedicationItem {
+  id: string;
+  name: string;
+  dosage: string;
+  timeTaken: string;
 }
 
 export type Priority = 'low' | 'medium' | 'high';
@@ -148,6 +158,7 @@ export interface AppSnapshot {
   symptomLogs: SymptomLog[];
   notes: NoteItem[];
   sessionLogs: SessionLog[];
+  medications?: MedicationItem[];
   battery: number;
   lastUpdated: number;
 }

@@ -30,6 +30,7 @@ import {
 } from 'recharts';
 import { UserProfile, SymptomLog, SessionLog, TodoItem } from '../types';
 import { CAREER_LEVELS, getLevelForXP, getNextLevelInfo } from '../lib/careerLevels';
+import { dayKey } from '../lib/activity';
 
 interface AnalyticsModalProps {
   isOpen: boolean;
@@ -39,6 +40,12 @@ interface AnalyticsModalProps {
   sessionLogs: SessionLog[];
   todos: TodoItem[];
 }
+
+const EmptyChartNote: React.FC<{ text: string }> = ({ text }) => (
+  <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+    <p className="text-[11px] font-medium text-slate-400 bg-white/80 dark:bg-slate-900/80 px-3 py-1.5 rounded-xl">{text}</p>
+  </div>
+);
 
 export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
   isOpen,
@@ -56,19 +63,20 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
   const levelInfo = getLevelForXP(currentXp);
   const nextInfo = getNextLevelInfo(currentXp);
 
-  // Generate 7-day activity data for the chart
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const activityData = days.map((day, idx) => {
-    const bits = Math.max(1, Math.round((userProfile.totalBitsLogged || 10) / 7 + (idx % 3)));
-    const energy = Math.min(100, Math.max(20, 80 - (idx * 5) + (idx % 2 === 0 ? 15 : -10)));
-    const xpGained = bits * 25;
+  // Last 7 calendar days (oldest first) from the recorded per-day history
+  const activityData = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - i));
+    const key = dayKey(date);
     return {
-      day,
-      bits,
-      energy,
-      xpGained,
+      day: i === 6 ? 'Today' : date.toLocaleDateString(undefined, { weekday: 'short' }),
+      bits: userProfile.dailyBits?.[key] ?? 0,
+      // null leaves a gap on days with no energy reading instead of plotting a fake 0
+      energy: userProfile.dailyEnergy?.[key] ?? null,
     };
   });
+  const hasBitsData = activityData.some((d) => d.bits > 0);
+  const hasEnergyData = activityData.some((d) => d.energy !== null);
 
   // Calculate symptom distribution
   const symptomCounts: Record<string, number> = {};
@@ -76,14 +84,7 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
     symptomCounts[log.symptomName] = (symptomCounts[log.symptomName] || 0) + 1;
   });
 
-  const pieData = Object.keys(symptomCounts).length > 0
-    ? Object.entries(symptomCounts).map(([name, count]) => ({ name, value: count }))
-    : [
-        { name: 'Executive Dysfunction', value: 4 },
-        { name: 'Sensory Overload', value: 3 },
-        { name: 'Autistic Burnout', value: 2 },
-        { name: 'Hyperfocus Exhaustion', value: 2 },
-      ];
+  const pieData = Object.entries(symptomCounts).map(([name, count]) => ({ name, value: count }));
 
   const COLORS = ['#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
 
@@ -358,12 +359,13 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-pink-500" />
-                <span>Weekly Focus Bits & XP Trend</span>
+                <span>Weekly Focus Bits</span>
               </h4>
               <span className="text-[10px] text-slate-400 font-medium">Last 7 Days</span>
             </div>
 
-            <div className="h-52 w-full">
+            <div className="h-52 w-full relative">
+              {!hasBitsData && <EmptyChartNote text="Complete focus bits to see your weekly trend." />}
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={activityData}>
                   <defs>
@@ -374,7 +376,7 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.1} />
                   <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                   <Tooltip />
                   <Area
                     type="monotone"
@@ -398,8 +400,10 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
                 <Zap className="w-4 h-4 text-amber-500" />
                 <span>Cognitive Energy Levels (%)</span>
               </h4>
+              <p className="text-[10px] text-slate-400 font-medium">Your energy battery at the end of each day</p>
 
-              <div className="h-44 w-full">
+              <div className="h-44 w-full relative">
+                {!hasEnergyData && <EmptyChartNote text="Energy readings will appear as you use the app." />}
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={activityData}>
                     <XAxis dataKey="day" tick={{ fontSize: 10 }} />
@@ -418,7 +422,8 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
                 <span>Symptom Distribution</span>
               </h4>
 
-              <div className="h-44 w-full flex items-center justify-center">
+              <div className="h-44 w-full flex items-center justify-center relative">
+                {pieData.length === 0 && <EmptyChartNote text="No symptoms logged yet." />}
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie

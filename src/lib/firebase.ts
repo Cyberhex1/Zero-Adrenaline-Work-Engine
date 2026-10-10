@@ -9,7 +9,7 @@ import {
   Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { UserProfile, TodoItem, SymptomLog, NoteItem, SessionLog } from '../types';
+import { UserProfile, TodoItem, SymptomLog, NoteItem, SessionLog, MedicationItem } from '../types';
 
 // Initialize Firebase App
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
@@ -29,6 +29,7 @@ export interface AppSnapshot {
   symptomLogs: SymptomLog[];
   notes: NoteItem[];
   sessionLogs: SessionLog[];
+  medications?: MedicationItem[];
   battery: number;
   lastUpdated: number;
 }
@@ -75,6 +76,7 @@ export async function saveAppSnapshot(
     symptomLogs: snapshot.symptomLogs || [],
     notes: snapshot.notes || [],
     sessionLogs: snapshot.sessionLogs || [],
+    medications: snapshot.medications || [],
     battery: typeof snapshot.battery === 'number' ? snapshot.battery : 100,
     lastUpdated,
   };

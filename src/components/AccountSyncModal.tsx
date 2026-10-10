@@ -30,7 +30,7 @@ import {
   BatteryCharging,
 } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
-import { UserProfile, TodoItem, SymptomLog, NoteItem, SessionLog } from '../types';
+import { UserProfile, TodoItem, SymptomLog, NoteItem, SessionLog, MedicationItem } from '../types';
 import { auth } from '../lib/firebase';
 import {
   signInWithEmailAndPassword,
@@ -52,6 +52,7 @@ interface AccountSyncModalProps {
   userProfile: UserProfile;
   todos: TodoItem[];
   symptomLogs: SymptomLog[];
+  medications: MedicationItem[];
   notes: NoteItem[];
   sessionLogs: SessionLog[];
   battery: number;
@@ -71,6 +72,7 @@ export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
   userProfile,
   todos,
   symptomLogs,
+  medications,
   notes,
   sessionLogs,
   battery,
@@ -231,6 +233,7 @@ export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
       userProfile,
       todos,
       symptomLogs,
+      medications,
       notes,
       sessionLogs,
       battery,

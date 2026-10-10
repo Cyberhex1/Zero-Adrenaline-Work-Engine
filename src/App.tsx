@@ -17,7 +17,8 @@ import { TypingSoundEngine } from './components/TypingSoundEngine';
 import { CuteUiDecorator } from './components/CuteUiDecorator';
 import { GlobalMusicPlayerBar } from './components/GlobalMusicPlayerBar';
 import { AccountSyncModal, SyncState } from './components/AccountSyncModal';
-import { SessionLog, TodoItem, SymptomLog, UserProfile, NoteItem, ActiveTab, TrackItem, MusicPlaylist, AudioType } from './types';
+import { SessionLog, TodoItem, SymptomLog, UserProfile, NoteItem, ActiveTab, TrackItem, MusicPlaylist, AudioType, MedicationItem } from './types';
+import { dayKey, updateDailyHistory } from './lib/activity';
 import { audioSynth } from './lib/audioSynth';
 import { DEFAULT_PLAYLISTS, extractYouTubeId } from './lib/musicData';
 import { User } from 'firebase/auth';
@@ -98,6 +99,11 @@ const DEFAULT_SYMPTOMS: SymptomLog[] = [
     copingMethod: '5-4-3-2-1 Grounding',
     notes: 'Grounding helped reduce heart rate within 3 minutes.',
   },
+];
+
+const DEFAULT_MEDICATIONS: MedicationItem[] = [
+  { id: '1', name: 'Magnesium Glycinate', dosage: '200mg', timeTaken: 'Morning' },
+  { id: '2', name: 'L-Theanine / Hydration', dosage: '100mg', timeTaken: 'Before Work' },
 ];
 
 const DEFAULT_NOTES: NoteItem[] = [
@@ -189,6 +195,10 @@ export default function App() {
     loadStored<SessionLog[]>('zawe_session_logs', [])
   );
 
+  const [medications, setMedications] = useState<MedicationItem[]>(() =>
+    loadStored('zawe_medications', DEFAULT_MEDICATIONS)
+  );
+
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [isSnapshotLoaded, setIsSnapshotLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncState>('guest');
@@ -199,8 +209,8 @@ export default function App() {
   // auto-saves for state that just arrived from the cloud (or was just written).
   const lastSyncedJsonRef = React.useRef<string | null>(null);
   // Always-current view of the syncable state, for async callbacks with stale closures.
-  const syncStateRef = React.useRef<SyncPayload>({ userProfile, todos, symptomLogs, notes, sessionLogs, battery });
-  syncStateRef.current = { userProfile, todos, symptomLogs, notes, sessionLogs, battery };
+  const syncStateRef = React.useRef<SyncPayload>({ userProfile, todos, symptomLogs, notes, sessionLogs, medications, battery });
+  syncStateRef.current = { userProfile, todos, symptomLogs, notes, sessionLogs, medications, battery };
 
   const [activeSprintTaskTitle, setActiveSprintTaskTitle] = useState<string>('');
   const [isPanicOpen, setIsPanicOpen] = useState<boolean>(false);
@@ -239,6 +249,7 @@ export default function App() {
       symptomLogs: snapshot.symptomLogs || current.symptomLogs,
       notes: snapshot.notes || current.notes,
       sessionLogs: snapshot.sessionLogs || current.sessionLogs,
+      medications: snapshot.medications || current.medications,
       battery: typeof snapshot.battery === 'number' ? snapshot.battery : current.battery,
     };
     lastSyncedJsonRef.current = JSON.stringify(next);
@@ -247,6 +258,7 @@ export default function App() {
     setSymptomLogs(next.symptomLogs);
     setNotes(next.notes);
     setSessionLogs(next.sessionLogs);
+    setMedications(next.medications || []);
     setBattery(next.battery);
     setLastSyncedAt(snapshot.lastUpdated || Date.now());
     setSyncStatus('synced');
@@ -361,7 +373,7 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, battery]);
+  }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, medications, battery]);
 
   // Load and subscribe to cloud snapshot on Auth change
   useEffect(() => {
@@ -445,11 +457,21 @@ export default function App() {
     }, 800); // 800ms debounce — fast but not spammy
 
     return () => clearTimeout(timeout);
-  }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, battery]);
+  }, [authUser, isSnapshotLoaded, userProfile, todos, symptomLogs, notes, sessionLogs, medications, battery]);
 
   useEffect(() => {
     localStorage.setItem('zawe_battery', battery.toString());
+    // Record the day's latest energy level for the Analytics chart
+    setUserProfile((p) =>
+      p.dailyEnergy?.[dayKey()] === battery
+        ? p
+        : { ...p, dailyEnergy: updateDailyHistory(p.dailyEnergy, () => battery) }
+    );
   }, [battery]);
+
+  useEffect(() => {
+    localStorage.setItem('zawe_medications', JSON.stringify(medications));
+  }, [medications]);
 
   useEffect(() => {
     localStorage.setItem('zawe_profile', JSON.stringify(userProfile));
@@ -475,6 +497,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('zawe_session_logs', JSON.stringify(sessionLogs));
   }, [sessionLogs]);
+
+  // Count a completed focus bit (lifetime total + today's count for Analytics)
+  const recordBitCompleted = () => {
+    setUserProfile((p) => ({
+      ...p,
+      totalBitsLogged: (p.totalBitsLogged || 0) + 1,
+      dailyBits: updateDailyHistory(p.dailyBits, (n) => (n || 0) + 1),
+    }));
+  };
 
   const addXp = (amount: number = 25) => {
     setUserProfile((prev) => {
@@ -526,10 +557,7 @@ export default function App() {
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, completed: nextCompleted } : t)));
     if (nextCompleted) {
       addXp(30);
-      setUserProfile((p) => ({
-        ...p,
-        totalBitsLogged: (p.totalBitsLogged || 0) + 1,
-      }));
+      recordBitCompleted();
       triggerToast('+30 XP! Task Completed 🌸');
     }
   };
@@ -580,10 +608,7 @@ export default function App() {
     );
     if (next) {
       addXp(15);
-      setUserProfile((p) => ({
-        ...p,
-        totalBitsLogged: (p.totalBitsLogged || 0) + 1,
-      }));
+      recordBitCompleted();
       triggerToast('+15 XP! 1 Focus Bit Completed 🌱');
     }
   };
@@ -609,10 +634,7 @@ export default function App() {
     };
     setSessionLogs((prev) => [newLog, ...prev]);
     addXp(40);
-    setUserProfile((p) => ({
-      ...p,
-      totalBitsLogged: (p.totalBitsLogged || 0) + 1,
-    }));
+    recordBitCompleted();
     triggerToast(`Logged sprint session for "${title}" (+40 XP) 🎉`);
   };
 
@@ -671,12 +693,14 @@ export default function App() {
     localStorage.removeItem('zawe_symptoms');
     localStorage.removeItem('zawe_notes');
     localStorage.removeItem('zawe_session_logs');
+    localStorage.removeItem('zawe_medications');
     setBattery(100);
     setUserProfile(DEFAULT_PROFILE);
     setTodos(DEFAULT_TODOS);
     setSymptomLogs(DEFAULT_SYMPTOMS);
     setNotes(DEFAULT_NOTES);
     setSessionLogs([]);
+    setMedications(DEFAULT_MEDICATIONS);
     triggerToast('All data cleared to fresh defaults.');
   };
 
@@ -688,6 +712,7 @@ export default function App() {
     if (Array.isArray(data.symptomLogs)) setSymptomLogs(data.symptomLogs);
     if (Array.isArray(data.notes)) setNotes(data.notes);
     if (Array.isArray(data.sessionLogs)) setSessionLogs(data.sessionLogs);
+    if (Array.isArray(data.medications)) setMedications(data.medications);
     if (typeof data.battery === 'number') setBattery(Math.min(100, Math.max(0, data.battery)));
     triggerToast('Backup restored! 📦');
   };
@@ -966,6 +991,8 @@ export default function App() {
             {activeTab === 'medical' && (
               <MedicalSymptomsTab
                 symptomLogs={symptomLogs}
+                medications={medications}
+                onUpdateMedications={setMedications}
                 onAddLog={handleAddSymptomLog}
                 onDeleteLog={handleDeleteSymptomLog}
               />
@@ -1161,6 +1188,7 @@ export default function App() {
           symptomLogs={symptomLogs}
           notes={notes}
           sessionLogs={sessionLogs}
+          medications={medications}
           battery={battery}
           onForceSync={handleForceSync}
           onRestoreFromCloud={handleRestoreFromCloud}

@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { Activity, Plus, Heart, AlertCircle, FileSpreadsheet, Calendar, Sparkles, Filter, Trash2, Download, Copy, Check, Pill, MapPin } from 'lucide-react';
-import { SymptomLog } from '../types';
+import { SymptomLog, MedicationItem } from '../types';
 
 interface MedicalSymptomsTabProps {
   symptomLogs: SymptomLog[];
+  medications: MedicationItem[];
+  onUpdateMedications: (meds: MedicationItem[]) => void;
   onAddLog: (log: Omit<SymptomLog, 'id' | 'timestamp' | 'date'>) => void;
   onDeleteLog: (id: string) => void;
 }
@@ -37,15 +39,11 @@ const COPING_METHODS = [
   'Bilateral Tapping / Touch',
 ];
 
-interface MedItem {
-  id: string;
-  name: string;
-  dosage: string;
-  timeTaken: string;
-}
 
 export const MedicalSymptomsTab: React.FC<MedicalSymptomsTabProps> = ({
   symptomLogs,
+  medications,
+  onUpdateMedications,
   onAddLog,
   onDeleteLog,
 }) => {
@@ -60,18 +58,16 @@ export const MedicalSymptomsTab: React.FC<MedicalSymptomsTabProps> = ({
   const [filterSymptom, setFilterSymptom] = useState<string>('all');
 
   // Medication / Supplement Tracker state
-  const [meds, setMeds] = useState<MedItem[]>([
-    { id: '1', name: 'Magnesium Glycinate', dosage: '200mg', timeTaken: 'Morning' },
-    { id: '2', name: 'L-Theanine / Hydration', dosage: '100mg', timeTaken: 'Before Work' },
-  ]);
+  // Medications live in App so they persist (localStorage + cloud sync)
+  const meds = medications;
   const [newMedName, setNewMedName] = useState<string>('');
   const [newMedDosage, setNewMedDosage] = useState<string>('');
 
   const handleAddMed = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMedName.trim()) return;
-    setMeds((prev) => [
-      ...prev,
+    onUpdateMedications([
+      ...meds,
       {
         id: Date.now().toString(),
         name: newMedName.trim(),
@@ -84,7 +80,7 @@ export const MedicalSymptomsTab: React.FC<MedicalSymptomsTabProps> = ({
   };
 
   const handleDeleteMed = (id: string) => {
-    setMeds((prev) => prev.filter((m) => m.id !== id));
+    onUpdateMedications(meds.filter((m) => m.id !== id));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
