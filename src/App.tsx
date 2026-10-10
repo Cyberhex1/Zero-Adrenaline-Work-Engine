@@ -28,7 +28,8 @@ import {
   fetchAppSnapshot,
   AppSnapshot,
 } from './lib/firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
+import { logoutGoogleWorkspace } from './lib/googleWorkspace';
 
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Calm Focus Worker',
@@ -140,6 +141,16 @@ const loadStored = <T,>(key: string, fallback: T): T => {
 
 type SyncPayload = Omit<AppSnapshot, 'lastUpdated'>;
 
+export type BackupData = Partial<SyncPayload>;
+
+// Playback state is per-device and per-session: nothing resumes audio on load, and
+// another device starting music shouldn't start (or claim to be playing) it here.
+const resetPlayback = (profile: UserProfile): UserProfile => ({
+  ...profile,
+  isPlayingMusic: false,
+  activeSoundscape: null,
+});
+
 const get2amCycleKey = (d: Date = new Date()): string => {
   const dateCopy = new Date(d);
   if (dateCopy.getHours() < 2) {
@@ -159,10 +170,12 @@ export default function App() {
     return Number.isFinite(saved) ? Math.min(100, Math.max(0, saved)) : 100;
   });
 
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => ({
-    ...DEFAULT_PROFILE,
-    ...loadStored<Partial<UserProfile>>('zawe_profile', {}),
-  }));
+  const [userProfile, setUserProfile] = useState<UserProfile>(() =>
+    resetPlayback({
+      ...DEFAULT_PROFILE,
+      ...loadStored<Partial<UserProfile>>('zawe_profile', {}),
+    })
+  );
 
   const [todos, setTodos] = useState<TodoItem[]>(() => loadStored('zawe_todos', DEFAULT_TODOS));
 
@@ -213,7 +226,15 @@ export default function App() {
   const applyRemoteSnapshot = (snapshot: AppSnapshot) => {
     const current = syncStateRef.current;
     const next: SyncPayload = {
-      userProfile: snapshot.userProfile ? { ...DEFAULT_PROFILE, ...snapshot.userProfile } : current.userProfile,
+      userProfile: snapshot.userProfile
+        ? {
+            ...DEFAULT_PROFILE,
+            ...snapshot.userProfile,
+            currentTrack: current.userProfile.currentTrack,
+            isPlayingMusic: current.userProfile.isPlayingMusic,
+            activeSoundscape: current.userProfile.activeSoundscape,
+          }
+        : current.userProfile,
       todos: snapshot.todos || current.todos,
       symptomLogs: snapshot.symptomLogs || current.symptomLogs,
       notes: snapshot.notes || current.notes,
@@ -301,22 +322,24 @@ export default function App() {
   const handleRestoreFromCloud = async () => {
     if (!authUser) return;
     setSyncStatus('syncing');
+    let snapshot: AppSnapshot | null;
     try {
-      const snapshot = await fetchAppSnapshot(authUser.uid);
-      if (snapshot) {
-        applyRemoteSnapshot(snapshot);
-        setIsSnapshotLoaded(true);
-        triggerToast('Restored state from Cloud Snapshot! ☁️');
-      } else {
-        setSyncStatus('synced');
-        triggerToast('No cloud snapshot found to restore.');
-      }
+      snapshot = await fetchAppSnapshot(authUser.uid);
     } catch (err: any) {
       setSyncStatus('error');
       setSyncErrorMsg(err?.message || 'Failed to restore from cloud');
       triggerToast('Restore failed: ' + (err?.message || 'Error'));
       throw err;
     }
+    if (!snapshot) {
+      setSyncStatus('synced');
+      triggerToast('No cloud snapshot found to restore.');
+      // Reject so callers don't report a successful restore
+      throw new Error('No cloud snapshot found');
+    }
+    applyRemoteSnapshot(snapshot);
+    setIsSnapshotLoaded(true);
+    triggerToast('Restored state from Cloud Snapshot! ☁️');
   };
 
   // Online / Offline network event detection
@@ -468,6 +491,11 @@ export default function App() {
   };
 
   const handleManualSync = async () => {
+    if (!authUser) {
+      setIsProfileOpen(false);
+      await handleForceSync();
+      throw new Error('Sign in to enable Cloud Sync');
+    }
     await handleForceSync();
   };
 
@@ -480,8 +508,9 @@ export default function App() {
     setBattery((prev) => Math.max(0, prev - amount));
   };
 
-  const handleAddTodo = (todo: Omit<TodoItem, 'id' | 'createdAt'>) => {
+  const handleAddTodo = (todo: Omit<TodoItem, 'id' | 'createdAt' | 'focusBits'> & Partial<Pick<TodoItem, 'focusBits'>>) => {
     const newTodo: TodoItem = {
+      focusBits: [],
       ...todo,
       id: 't_' + Date.now(),
       createdAt: Date.now(),
@@ -529,7 +558,7 @@ export default function App() {
           }));
           return {
             ...t,
-            focusBits: [...t.focusBits, ...newBits],
+            focusBits: [...(t.focusBits || []), ...newBits],
           };
         }
         return t;
@@ -539,7 +568,7 @@ export default function App() {
   };
 
   const handleToggleFocusBit = (todoId: string, bitId: string) => {
-    const bit = todos.find((t) => t.id === todoId)?.focusBits.find((b) => b.id === bitId);
+    const bit = todos.find((t) => t.id === todoId)?.focusBits?.find((b) => b.id === bitId);
     if (!bit) return;
     const next = !bit.completed;
     setTodos((prev) =>
@@ -587,8 +616,9 @@ export default function App() {
     triggerToast(`Logged sprint session for "${title}" (+40 XP) 🎉`);
   };
 
-  const handleAddSymptomLog = (log: Omit<SymptomLog, 'id' | 'timestamp'>) => {
+  const handleAddSymptomLog = (log: Omit<SymptomLog, 'id' | 'timestamp' | 'date'> & Partial<Pick<SymptomLog, 'date'>>) => {
     const newLog: SymptomLog = {
+      date: new Date().toLocaleString(),
       ...log,
       id: 'sym_' + Date.now(),
       timestamp: Date.now(),
@@ -603,8 +633,9 @@ export default function App() {
     triggerToast('Log entry removed.');
   };
 
-  const handleAddNote = (note: Omit<NoteItem, 'id' | 'timestamp'>) => {
+  const handleAddNote = (note: Omit<NoteItem, 'id' | 'timestamp' | 'date'> & Partial<Pick<NoteItem, 'date'>>) => {
     const newNote: NoteItem = {
+      date: new Date().toLocaleDateString(),
       ...note,
       id: 'note_' + Date.now(),
       timestamp: Date.now(),
@@ -630,7 +661,10 @@ export default function App() {
     triggerToast('Daily Reset complete! Energy restored to 100% 🌿');
   };
 
-  const handleClearAllData = () => {
+  const handleClearAllData = async () => {
+    // Sign out first, otherwise auto-save would push the fresh defaults over the cloud copy.
+    // The cloud data is kept and comes back on the next sign-in.
+    if (authUser) await logoutGoogleWorkspace();
     localStorage.removeItem('zawe_battery');
     localStorage.removeItem('zawe_profile');
     localStorage.removeItem('zawe_todos');
@@ -646,6 +680,18 @@ export default function App() {
     triggerToast('All data cleared to fresh defaults.');
   };
 
+  // Apply an imported JSON backup directly to state; auto-save then pushes it to the cloud.
+  // (Reloading instead let the existing cloud snapshot silently overwrite the import.)
+  const handleImportBackup = (data: BackupData) => {
+    if (data.userProfile) setUserProfile(resetPlayback({ ...DEFAULT_PROFILE, ...data.userProfile }));
+    if (Array.isArray(data.todos)) setTodos(data.todos.map((t) => ({ ...t, focusBits: t.focusBits || [] })));
+    if (Array.isArray(data.symptomLogs)) setSymptomLogs(data.symptomLogs);
+    if (Array.isArray(data.notes)) setNotes(data.notes);
+    if (Array.isArray(data.sessionLogs)) setSessionLogs(data.sessionLogs);
+    if (typeof data.battery === 'number') setBattery(Math.min(100, Math.max(0, data.battery)));
+    triggerToast('Backup restored! 📦');
+  };
+
   const handleResetLevelXP = () => {
     handleUpdateProfile({
       ...userProfile,
@@ -657,7 +703,24 @@ export default function App() {
   };
 
   // Single Audio Engine Handlers
+  const pausedSoundscapeRef = React.useRef<AudioType | null>(null);
+  const musicIframeRef = React.useRef<HTMLIFrameElement | null>(null);
+
+  // Apply the music volume to the hidden YouTube player (enablejsapi=1 accepts postMessage commands)
+  const applyMusicVolume = () => {
+    musicIframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({
+        event: 'command',
+        func: 'setVolume',
+        args: [Math.round((userProfile.musicVolume ?? 0.7) * 100)],
+      }),
+      '*'
+    );
+  };
+  useEffect(applyMusicVolume, [userProfile.musicVolume]);
+
   const handlePlayTrack = (track: TrackItem, playlist?: MusicPlaylist) => {
+    pausedSoundscapeRef.current = null;
     audioSynth.stopAllSoundscapes();
     setIsPlayerBarDismissed(false);
     setUserProfile((prev) => ({
@@ -676,12 +739,19 @@ export default function App() {
     if (!userProfile.currentTrack) return '';
     const ytId = userProfile.currentTrack.youtubeId || '';
     const ytUrl = userProfile.currentTrack.youtubeUrl || '';
+    const isQueueTrack = ytId.includes('videoseries');
+
+    // A specific video inside a playlist (e.g. a custom playlist's "Starting Track")
+    const { videoId: urlVideoId, playlistId: urlPlaylistId } = extractYouTubeId(ytUrl || ytId);
+    if (!isQueueTrack && urlVideoId && urlPlaylistId) {
+      return `https://www.youtube-nocookie.com/embed/${urlVideoId}?list=${urlPlaylistId}&autoplay=1&playsinline=1&controls=1&enablejsapi=1`;
+    }
 
     // Check if it's a playlist URL or list parameter
+    // (11-char IDs are videos, even if they happen to start with PL/RD)
     if (
-      ytId.includes('videoseries') ||
-      ytId.startsWith('PL') ||
-      ytId.startsWith('RD') ||
+      isQueueTrack ||
+      (ytId.length > 11 && (ytId.startsWith('PL') || ytId.startsWith('RD'))) ||
       (ytUrl && ytUrl.includes('list='))
     ) {
       const { playlistId } = extractYouTubeId(ytUrl || ytId);
@@ -701,10 +771,13 @@ export default function App() {
 
   const handleTogglePlayPause = () => {
     if (userProfile.activeSoundscape) {
-      const current = userProfile.activeSoundscape;
+      pausedSoundscapeRef.current = userProfile.activeSoundscape;
       audioSynth.stopAllSoundscapes();
       setUserProfile((prev) => ({ ...prev, activeSoundscape: null }));
       triggerToast('Audio paused');
+    } else if (pausedSoundscapeRef.current) {
+      // Resume the soundscape that was paused (previously this started the default playlist)
+      handlePlaySoundscape(pausedSoundscapeRef.current);
     } else if (userProfile.currentTrack) {
       const nextPlaying = !userProfile.isPlayingMusic;
       setUserProfile((prev) => ({ ...prev, isPlayingMusic: nextPlaying }));
@@ -716,6 +789,7 @@ export default function App() {
   };
 
   const handlePlaySoundscape = (type: AudioType) => {
+    pausedSoundscapeRef.current = null;
     if (userProfile.activeSoundscape === type) {
       audioSynth.stopSoundscape(type);
       setUserProfile((prev) => ({ ...prev, activeSoundscape: null }));
@@ -740,6 +814,8 @@ export default function App() {
 
     const playlist = allPlaylists.find((p) => p.tracks.some((t) => t.id === currentTrack.id)) || allPlaylists[0];
     const currentIndex = playlist.tracks.findIndex((t) => t.id === currentTrack.id);
+    // Current track no longer exists in any playlist: start from the top
+    if (currentIndex === -1) return handlePlayTrack(playlist.tracks[0], playlist);
     const nextIndex = (currentIndex + 1) % playlist.tracks.length;
     handlePlayTrack(playlist.tracks[nextIndex], playlist);
   };
@@ -751,11 +827,14 @@ export default function App() {
 
     const playlist = allPlaylists.find((p) => p.tracks.some((t) => t.id === currentTrack.id)) || allPlaylists[0];
     const currentIndex = playlist.tracks.findIndex((t) => t.id === currentTrack.id);
+    // Current track no longer exists in any playlist: start from the top
+    if (currentIndex === -1) return handlePlayTrack(playlist.tracks[0], playlist);
     const prevIndex = (currentIndex - 1 + playlist.tracks.length) % playlist.tracks.length;
     handlePlayTrack(playlist.tracks[prevIndex], playlist);
   };
 
   const handleStopAllAudio = () => {
+    pausedSoundscapeRef.current = null;
     audioSynth.stopAllSoundscapes();
     setUserProfile((prev) => ({
       ...prev,
@@ -871,13 +950,14 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'sprint' && (
+            {/* Kept mounted so a running sprint survives switching tabs */}
+            <div hidden={activeTab !== 'sprint'}>
               <MicroSprintTimer
                 onLogTask={handleLogTask}
                 onDrainBattery={handleDrainBattery}
                 activeTaskTitle={activeSprintTaskTitle}
               />
-            )}
+            </div>
 
             {activeTab === 'meditation' && <MeditationTab />}
 
@@ -1017,6 +1097,8 @@ export default function App() {
               key={userProfile.currentTrack.id + '_' + userProfile.currentTrack.youtubeId}
               width="200"
               height="200"
+              ref={musicIframeRef}
+              onLoad={applyMusicVolume}
               src={getEmbedUrl()}
               title="Focus Audio Engine"
               allow="autoplay; encrypted-media; picture-in-picture"
@@ -1053,13 +1135,14 @@ export default function App() {
           }}
           onDailyReset={handleDailyReset}
           onClearAllData={handleClearAllData}
+          onImportBackup={handleImportBackup}
           onResetLevelXP={handleResetLevelXP}
           authUser={authUser}
           onOpenAccountSync={() => setIsAccountModalOpen(true)}
           syncStatus={syncStatus}
           lastSyncedAt={lastSyncedAt}
           onGoogleLogout={async () => {
-            await signOut(auth);
+            await logoutGoogleWorkspace();
             // Do NOT wipe local data on sign-out — data stays locally
             // and will be re-loaded from cloud on next sign-in
             triggerToast('Signed out. Your local data is preserved.');
@@ -1082,6 +1165,7 @@ export default function App() {
           onForceSync={handleForceSync}
           onRestoreFromCloud={handleRestoreFromCloud}
           onClearLocalData={handleClearAllData}
+          onImportBackup={handleImportBackup}
         />
       </div>
     </div>

@@ -64,13 +64,15 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const isPlaying = !!userProfile.isPlayingMusic || !!userProfile.activeSoundscape;
 
-  const currentTitle = userProfile.currentTrack
-    ? userProfile.currentTrack.title
-    : userProfile.activeSoundscape === 'brown'
-    ? 'Brown Noise'
-    : userProfile.activeSoundscape === 'cute_hyper'
-    ? 'Hi Popping Synth'
-    : 'Focus Music';
+  // A soundscape takes priority: currentTrack is kept (paused) when switching to one
+  const currentTitle =
+    userProfile.activeSoundscape === 'brown'
+      ? 'Brown Noise'
+      : userProfile.activeSoundscape === 'cute_hyper'
+      ? 'Hi Popping Synth'
+      : userProfile.activeSoundscape
+      ? 'Focus Soundscape'
+      : userProfile.currentTrack?.title ?? 'Focus Music';
 
   // Format short sync text for pill
   const getSyncPillContent = () => {

@@ -57,11 +57,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [showConfirmResetLevel, setShowConfirmResetLevel] = useState<boolean>(false);
 
+  // Track the live profile while not editing (this also discards unsaved edits on Cancel);
+  // while editing, don't let XP/music/cloud updates wipe what the user is typing.
   useEffect(() => {
-    if (profile) {
+    if (profile && !isEditing) {
       setFormData(profile);
     }
-  }, [profile]);
+  }, [profile, isEditing]);
 
   if (!isOpen) return null;
 
@@ -71,7 +73,16 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onUpdateProfile(formData);
+    // Only apply the edited fields so XP / music state that changed meanwhile isn't rolled back
+    const goal = formData.dailyGoalBits;
+    onUpdateProfile({
+      ...currentProfile,
+      name: formData.name,
+      roleTitle: formData.roleTitle,
+      avatarEmoji: formData.avatarEmoji,
+      dailyGoalBits: goal && Number.isFinite(goal) ? Math.min(50, Math.max(1, goal)) : 1,
+      panicGroundingPhrase: formData.panicGroundingPhrase,
+    });
     setIsEditing(false);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 2500);
@@ -83,8 +94,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     try {
       await onManualSync();
       setSyncStatus('Synced successfully!');
-    } catch {
-      setSyncStatus('Sync complete!');
+    } catch (err: any) {
+      setSyncStatus('Sync failed: ' + (err?.message || 'please retry'));
     } finally {
       setIsSyncing(false);
       setTimeout(() => setSyncStatus(null), 3000);
@@ -186,7 +197,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   if (onResetLevelXP) {
                     onResetLevelXP();
                   } else {
-                    onUpdateProfile({ ...formData, xp: 0, totalBitsLogged: 0, streakDays: 0 });
+                    onUpdateProfile({ ...currentProfile, xp: 0, totalBitsLogged: 0, streakDays: 0 });
                   }
                   setShowConfirmResetLevel(false);
                 }}
@@ -257,7 +268,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
             <div>
               <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Zero-Dread Streak</p>
-              <p className="text-sm font-black text-slate-800 dark:text-slate-100 font-mono">{formData.streakDays || 1} Days</p>
+              <p className="text-sm font-black text-slate-800 dark:text-slate-100 font-mono">{formData.streakDays ?? 0} Days</p>
             </div>
           </div>
         </div>
@@ -355,8 +366,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 type="number"
                 min="1"
                 max="50"
-                value={formData.dailyGoalBits}
-                onChange={(e) => setFormData({ ...formData, dailyGoalBits: parseInt(e.target.value) || 1 })}
+                value={formData.dailyGoalBits ?? ''}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    // Allow an empty field while typing; clamped on save
+                    dailyGoalBits: e.target.value === '' ? undefined : parseInt(e.target.value, 10),
+                  })
+                }
                 className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-pink-500 font-medium font-mono"
               />
               <p className="text-[10px] text-slate-400 mt-1">

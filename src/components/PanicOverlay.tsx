@@ -4,7 +4,7 @@ import { ShieldAlert, X, Plus, Sparkles } from 'lucide-react';
 interface PanicOverlayProps {
   isOpen: boolean;
   onClose: () => void;
-  onLogTask: () => void;
+  onLogTask: (title: string, durationSec?: number) => void;
   totalLogged: number;
 }
 
@@ -19,7 +19,7 @@ export const PanicOverlay: React.FC<PanicOverlayProps> = ({
   if (!isOpen) return null;
 
   const handleClick = () => {
-    onLogTask();
+    onLogTask('Panic Mode Focus Bit', 60);
     setClickAnimation(true);
     setTimeout(() => setClickAnimation(false), 200);
   };

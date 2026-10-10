@@ -13,6 +13,7 @@ import {
   Minimize2,
 } from 'lucide-react';
 import { TrackItem, UserProfile, AudioType } from '../types';
+import { audioSynth } from '../lib/audioSynth';
 
 interface GlobalMusicPlayerBarProps {
   userProfile: UserProfile;
@@ -49,18 +50,21 @@ export const GlobalMusicPlayerBar: React.FC<GlobalMusicPlayerBarProps> = ({
     return null;
   }
 
-  const title = currentTrack
-    ? currentTrack.title
-    : activeSoundscape === 'brown'
-    ? 'Brown Noise (ADHD Focus Rumble)'
-    : activeSoundscape === 'cute_hyper'
-    ? 'Hi Popping Synth Rhythm'
-    : 'Focus Soundscape';
+  // A soundscape takes priority: currentTrack is kept (paused) when switching to one
+  const title =
+    activeSoundscape === 'brown'
+      ? 'Brown Noise (ADHD Focus Rumble)'
+      : activeSoundscape === 'cute_hyper'
+      ? 'Hi Popping Synth Rhythm'
+      : activeSoundscape
+      ? 'Focus Soundscape'
+      : currentTrack?.title ?? 'Focus Soundscape';
 
-  const subtitle = currentTrack ? currentTrack.artist : 'Procedural Audio Engine';
+  const subtitle = !activeSoundscape && currentTrack ? currentTrack.artist : 'Procedural Audio Engine';
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
+    if (activeSoundscape) audioSynth.setSoundscapeVolume(activeSoundscape, val);
     onUpdateProfile({
       ...userProfile,
       musicVolume: val,
@@ -71,11 +75,13 @@ export const GlobalMusicPlayerBar: React.FC<GlobalMusicPlayerBarProps> = ({
   return (
     <div className="fixed bottom-3 left-1/2 -translate-x-1/2 w-[95%] max-w-4xl bg-slate-900/95 dark:bg-slate-950/95 border border-pink-500/30 backdrop-blur-xl text-white rounded-2xl p-3 md:px-5 md:py-2.5 shadow-2xl shadow-pink-500/20 z-40 animate-slideUp flex flex-col gap-2">
       {/* Mini Video Dock (Collapsible) */}
-      {showMiniVideo && currentTrack && embedUrl && (
+      {/* Muted and only while music plays: App's hidden iframe is the audio source, so an
+          unmuted autoplaying copy here doubled the audio and kept playing after Pause */}
+      {showMiniVideo && currentTrack && embedUrl && userProfile.isPlayingMusic && (
         <div className="w-full flex items-center justify-between p-2 rounded-xl bg-black/60 border border-slate-800">
           <div className="aspect-video w-48 max-w-full rounded-lg overflow-hidden bg-black shadow-inner">
             <iframe
-              src={embedUrl}
+              src={embedUrl + '&mute=1'}
               className="w-full h-full"
               title="Mini Focus Player"
               allow="autoplay; encrypted-media; picture-in-picture"

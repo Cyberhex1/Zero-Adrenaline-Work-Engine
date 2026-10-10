@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Pause, RotateCcw, Heart, Sparkles, Volume2, VolumeX, Shield, Circle, Sun, Moon, Wind } from 'lucide-react';
 import { audioSynth } from '../lib/audioSynth';
 
@@ -99,78 +99,80 @@ export const MeditationTab: React.FC<MeditationTabProps> = ({ onCompleteSession 
   const [isPlayingDrone, setIsPlayingDrone] = useState<boolean>(false);
   const [isPlayingRain, setIsPlayingRain] = useState<boolean>(false);
 
-  const breathTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const meditationTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Both timers tick with a per-second timeout and do phase transitions outside of state
+  // updaters (StrictMode double-invokes updaters, which double-chimed and double-counted cycles).
 
   // Handle Breathing Pacer Logic
   useEffect(() => {
-    if (!isBreathingRunning) {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
-      return;
-    }
+    if (!isBreathingRunning) return;
 
-    breathTimerRef.current = setInterval(() => {
-      setPhaseSecondsLeft((prev) => {
-        if (prev > 1) return prev - 1;
+    const id = setTimeout(() => {
+      if (phaseSecondsLeft > 1) {
+        setPhaseSecondsLeft(phaseSecondsLeft - 1);
+        return;
+      }
 
-        // Transition breath phase
-        if (breathPhase === 'inhale') {
-          if (selectedTech.hold1 > 0) {
-            setBreathPhase('hold');
-            return selectedTech.hold1;
-          } else {
-            setBreathPhase('exhale');
-            return selectedTech.exhale;
-          }
-        } else if (breathPhase === 'hold') {
-          setBreathPhase('exhale');
-          return selectedTech.exhale;
-        } else if (breathPhase === 'exhale') {
-          if (selectedTech.hold2 > 0) {
-            setBreathPhase('rest');
-            return selectedTech.hold2;
-          } else {
-            setBreathPhase('inhale');
-            setCompletedCycles((c) => c + 1);
-            audioSynth.playChime();
-            return selectedTech.inhale;
-          }
+      const completeCycle = () => {
+        setBreathPhase('inhale');
+        setPhaseSecondsLeft(selectedTech.inhale);
+        setCompletedCycles((c) => c + 1);
+        audioSynth.playChime();
+      };
+
+      // Transition breath phase
+      if (breathPhase === 'inhale') {
+        if (selectedTech.hold1 > 0) {
+          setBreathPhase('hold');
+          setPhaseSecondsLeft(selectedTech.hold1);
         } else {
-          setBreathPhase('inhale');
-          setCompletedCycles((c) => c + 1);
-          audioSynth.playChime();
-          return selectedTech.inhale;
+          setBreathPhase('exhale');
+          setPhaseSecondsLeft(selectedTech.exhale);
         }
-      });
+      } else if (breathPhase === 'hold') {
+        setBreathPhase('exhale');
+        setPhaseSecondsLeft(selectedTech.exhale);
+      } else if (breathPhase === 'exhale') {
+        if (selectedTech.hold2 > 0) {
+          setBreathPhase('rest');
+          setPhaseSecondsLeft(selectedTech.hold2);
+        } else {
+          completeCycle();
+        }
+      } else {
+        completeCycle();
+      }
     }, 1000);
 
-    return () => {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
-    };
-  }, [isBreathingRunning, breathPhase, selectedTech]);
+    return () => clearTimeout(id);
+  }, [isBreathingRunning, phaseSecondsLeft, breathPhase, selectedTech]);
 
   // Handle Timed Meditation Timer Logic
   useEffect(() => {
-    if (!isTimerRunning) {
-      if (meditationTimerRef.current) clearInterval(meditationTimerRef.current);
-      return;
-    }
+    if (!isTimerRunning) return;
 
-    meditationTimerRef.current = setInterval(() => {
-      setTimerSecondsLeft((prev) => {
-        if (prev > 1) return prev - 1;
+    const id = setTimeout(() => {
+      if (timerSecondsLeft > 1) {
+        setTimerSecondsLeft(timerSecondsLeft - 1);
+        return;
+      }
 
-        audioSynth.playChime();
-        setIsTimerRunning(false);
-        if (onCompleteSession) onCompleteSession();
-        return 0;
-      });
+      setTimerSecondsLeft(0);
+      setIsTimerRunning(false);
+      audioSynth.playChime();
+      if (onCompleteSession) onCompleteSession();
     }, 1000);
 
-    return () => {
-      if (meditationTimerRef.current) clearInterval(meditationTimerRef.current);
-    };
-  }, [isTimerRunning, onCompleteSession]);
+    return () => clearTimeout(id);
+  }, [isTimerRunning, timerSecondsLeft, onCompleteSession]);
+
+  // Stop meditation-only sounds when leaving the tab (their toggles reset on remount)
+  useEffect(
+    () => () => {
+      audioSynth.stopSoundscape('drone');
+      audioSynth.stopSoundscape('rain');
+    },
+    []
+  );
 
   const handleSelectTechnique = (tech: TechniqueInfo) => {
     setSelectedTech(tech);
@@ -456,7 +458,11 @@ export const MeditationTab: React.FC<MeditationTabProps> = ({ onCompleteSession 
           {/* Controls */}
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setIsTimerRunning((prev) => !prev)}
+              onClick={() => {
+                // Starting again after a finished session restarts the full duration
+                if (!isTimerRunning && timerSecondsLeft === 0) setTimerSecondsLeft(timerMinutes * 60);
+                setIsTimerRunning((prev) => !prev);
+              }}
               className={`px-8 py-3 rounded-2xl font-bold text-sm flex items-center gap-2 transition-all cursor-pointer shadow-md ${
                 isTimerRunning
                   ? 'bg-amber-500 text-white shadow-amber-500/20'

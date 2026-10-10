@@ -36,9 +36,9 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
-  signOut,
 } from 'firebase/auth';
-import { signInWithGoogleWorkspace } from '../lib/googleWorkspace';
+import { signInWithGoogleWorkspace, logoutGoogleWorkspace } from '../lib/googleWorkspace';
+import type { BackupData } from '../App';
 
 export type SyncState = 'synced' | 'syncing' | 'error' | 'offline' | 'guest';
 
@@ -58,6 +58,7 @@ interface AccountSyncModalProps {
   onForceSync: () => Promise<void>;
   onRestoreFromCloud: () => Promise<void>;
   onClearLocalData: () => void;
+  onImportBackup: (data: BackupData) => void;
 }
 
 export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
@@ -76,6 +77,7 @@ export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
   onForceSync,
   onRestoreFromCloud,
   onClearLocalData,
+  onImportBackup,
 }) => {
   // Auth Form State
   const [authTab, setAuthTab] = useState<'signin' | 'signup' | 'forgot'>('signin');
@@ -183,7 +185,7 @@ export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
 
   const handleSignOut = async () => {
     try {
-      await signOut(auth);
+      await logoutGoogleWorkspace();
       setAuthSuccess('Signed out successfully.');
       setTimeout(() => setAuthSuccess(null), 3000);
     } catch (err: any) {
@@ -251,15 +253,8 @@ export const AccountSyncModal: React.FC<AccountSyncModalProps> = ({
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string);
-        if (parsed.userProfile) localStorage.setItem('zawe_profile', JSON.stringify(parsed.userProfile));
-        if (parsed.todos) localStorage.setItem('zawe_todos', JSON.stringify(parsed.todos));
-        if (parsed.symptomLogs) localStorage.setItem('zawe_symptoms', JSON.stringify(parsed.symptomLogs));
-        if (parsed.notes) localStorage.setItem('zawe_notes', JSON.stringify(parsed.notes));
-        if (parsed.sessionLogs) localStorage.setItem('zawe_session_logs', JSON.stringify(parsed.sessionLogs));
-        if (parsed.battery) localStorage.setItem('zawe_battery', parsed.battery.toString());
-
-        alert('Backup successfully imported! Refreshing page to load state.');
-        window.location.reload();
+        onImportBackup(parsed);
+        alert('Backup successfully imported!');
       } catch (err) {
         alert('Invalid JSON backup file.');
       }

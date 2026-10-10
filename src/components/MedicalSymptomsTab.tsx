@@ -111,25 +111,31 @@ export const MedicalSymptomsTab: React.FC<MedicalSymptomsTabProps> = ({
     return 'bg-rose-100 text-rose-800 border-rose-200 animate-pulse';
   };
 
+  // Legacy/imported logs may store triggers as an array
+  const formatTriggers = (triggers: SymptomLog['triggers']) =>
+    Array.isArray(triggers) ? triggers.join('; ') : triggers;
+
   const handleDownloadDoctorCSV = () => {
     const headers = ['Date', 'Symptom & Location', 'Severity (1-10)', 'Triggers', 'Coping Method', 'Notes'];
     const rows = symptomLogs.map((l) => [
-      `"${l.date}"`,
+      `"${(l.date || new Date(l.timestamp).toLocaleString()).replace(/"/g, '""')}"`,
       `"${(l.symptomName || '').replace(/"/g, '""')}"`,
       l.severity,
-      `"${(l.triggers || 'N/A').replace(/"/g, '""')}"`,
+      `"${(formatTriggers(l.triggers) || 'N/A').replace(/"/g, '""')}"`,
       `"${(l.copingMethod || 'N/A').replace(/"/g, '""')}"`,
       `"${(l.notes || 'N/A').replace(/"/g, '""')}"`,
     ]);
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
+    // Use a Blob URL: encodeURI leaves '#' unescaped, which truncated the CSV at the first '#'
+    const csvBody = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const url = URL.createObjectURL(new Blob([csvBody], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', url);
     link.setAttribute('download', `MentalMedic_Doctor_Symptom_Log_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleExportReport = () => {
@@ -145,16 +151,20 @@ ${symptomLogs
   .map(
     (l) =>
       `[${l.date}] ${l.symptomName} | Severity: ${l.severity}/10
-- Trigger: ${l.triggers || 'N/A'}
+- Trigger: ${formatTriggers(l.triggers) || 'N/A'}
 - Coping Method: ${l.copingMethod || 'N/A'}
 - Notes: ${l.notes || 'None'}`
   )
   .join('\n\n')}
 `;
 
-    navigator.clipboard.writeText(reportText);
-    setCopiedReport(true);
-    setTimeout(() => setCopiedReport(false), 3000);
+    navigator.clipboard.writeText(reportText).then(
+      () => {
+        setCopiedReport(true);
+        setTimeout(() => setCopiedReport(false), 3000);
+      },
+      () => alert('Could not copy the report to your clipboard.')
+    );
   };
 
   const avgSeverity =
@@ -408,7 +418,7 @@ ${symptomLogs
                 <div className="text-xs space-y-1 text-slate-600">
                   {log.triggers && (
                     <p>
-                      <span className="font-semibold text-slate-700">Trigger:</span> {log.triggers}
+                      <span className="font-semibold text-slate-700">Trigger:</span> {formatTriggers(log.triggers)}
                     </p>
                   )}
                   {log.copingMethod && (

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -35,6 +35,7 @@ import {
 } from 'firebase/auth';
 import { signInWithGoogleWorkspace } from '../lib/googleWorkspace';
 import { SyncState } from './AccountSyncModal';
+import type { BackupData } from '../App';
 
 const TAB_DETAILS: Record<ActiveTab, { label: string; desc: string; emoji: string }> = {
   todo: { label: 'To-Do & Focus Bits Matrix', desc: 'Breakdowns, Eisenhower, 1-3-5 & Frog tactics', emoji: '📝' },
@@ -167,6 +168,7 @@ interface SettingsModalProps {
   authUser: FirebaseUser | null;
   onDailyReset: () => void;
   onClearAllData: () => void;
+  onImportBackup: (data: BackupData) => void;
   onResetLevelXP?: () => void;
   onGoogleLogout?: () => void;
   onOpenAccountSync?: () => void;
@@ -183,6 +185,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   authUser,
   onDailyReset,
   onClearAllData,
+  onImportBackup,
   onResetLevelXP,
   onGoogleLogout,
   onOpenAccountSync,
@@ -210,6 +213,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [showConfirmClearAll, setShowConfirmClearAll] = useState<boolean>(false);
   const [showConfirmResetLevel, setShowConfirmResetLevel] = useState<boolean>(false);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+
+  // The modal stays mounted, so refresh the form from the latest profile each time it opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setDailyGoal(currentProfile.dailyGoalBits ?? 5);
+    setNoiseType(currentProfile.preferredNoise ?? 'brown');
+    setPanicPhrase(currentProfile.panicGroundingPhrase ?? 'I am completely safe. 1 Focus Bit is enough for today.');
+    setThemeMode(currentProfile.theme === 'dark' ? 'dark' : 'light');
+  }, [isOpen]);
 
   // Email/Password Auth state
   const [emailMode, setEmailMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
@@ -272,12 +284,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleThemeChange = (newTheme: 'light' | 'dark') => {
+    // Persist immediately: App re-applies profile.theme on every profile change,
+    // so a DOM-only toggle was reverted at random
     setThemeMode(newTheme);
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    onUpdateProfile({ ...currentProfile, theme: newTheme });
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -331,18 +341,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string);
-        if (parsed.userProfile) {
-          localStorage.setItem('zawe_profile', JSON.stringify(parsed.userProfile));
-          onUpdateProfile(parsed.userProfile);
-        }
-        if (parsed.todos) localStorage.setItem('zawe_todos', JSON.stringify(parsed.todos));
-        if (parsed.symptomLogs) localStorage.setItem('zawe_symptoms', JSON.stringify(parsed.symptomLogs));
-        if (parsed.notes) localStorage.setItem('zawe_notes', JSON.stringify(parsed.notes));
-        if (parsed.sessionLogs) localStorage.setItem('zawe_session_logs', JSON.stringify(parsed.sessionLogs));
-        if (parsed.battery) localStorage.setItem('zawe_battery', parsed.battery.toString());
-
-        alert('Backup successfully restored! Reloading application state.');
-        window.location.reload();
+        onImportBackup(parsed);
+        alert('Backup successfully restored!');
       } catch (err) {
         alert('Could not parse backup file. Please ensure it is a valid JSON file.');
       }
@@ -538,8 +538,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onClick={async () => {
                       try {
                         await signInWithGoogleWorkspace();
-                      } catch (err) {
-                        console.warn(err);
+                      } catch (err: any) {
+                        setEmailAuthMsg({ type: 'error', text: err?.message || 'Google sign-in failed.' });
                       }
                     }}
                     className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer text-xs"
@@ -688,6 +688,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <option value={5}>5 Focus Bits (Balanced Baseline Goal ⚖️)</option>
                 <option value={8}>8 Focus Bits (High Velocity Focus 🚀)</option>
                 <option value={12}>12 Focus Bits (Excellent Day / Peak Capacity 🌟)</option>
+                {/* Custom goals set in the Profile modal (1-50) aren't presets; show them instead of falling back to "1" */}
+                {![1, 3, 5, 8, 12].includes(dailyGoal) && (
+                  <option value={dailyGoal}>{dailyGoal} Focus Bits (Custom)</option>
+                )}
               </select>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-medium">
                 1 bit is crisis mode (completing 1 micro-bit defeats paralysis). 12 bits represents an excellent, high-yield day.

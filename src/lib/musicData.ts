@@ -165,7 +165,10 @@ export function extractYouTubeId(urlOrId: string): { videoId?: string; playlistI
   const playlistId = playlistMatch ? playlistMatch[1] : undefined;
 
   // Extract video ID if present
-  const videoMatch = clean.match(/(?:youtu\.be\/|v=|\/v\/|\/embed\/|watch\?v=|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  // (/embed/videoseries is a playlist, not an 11-char video ID; /live/ links are streams)
+  const videoMatch = clean.match(
+    /(?:youtu\.be\/|[?&]v=|\/v\/|\/embed\/(?!videoseries)|\/shorts\/|\/live\/)([a-zA-Z0-9_-]{11})(?![a-zA-Z0-9_-])/
+  );
   const videoId = videoMatch ? videoMatch[1] : undefined;
 
   return { videoId, playlistId };

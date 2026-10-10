@@ -143,7 +143,8 @@ export const SoundscapeMixerModal: React.FC<SoundscapeMixerModalProps> = ({
           ...base,
           id: 'pl_custom_' + Date.now(),
           name: `${base.name} (Custom)`,
-          tracks: [...base.tracks, newTrack],
+          // Fresh track ids, so next/prev resolve to this playlist rather than the default one
+          tracks: [...base.tracks.map((t) => ({ ...t, id: `${t.id}_${Date.now()}` })), newTrack],
           isCustom: true,
         };
         updatedPlaylists.push(cloned);

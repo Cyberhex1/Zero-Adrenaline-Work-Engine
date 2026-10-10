@@ -3,8 +3,10 @@ import { AudioType } from '../types';
 const MOODIST_BASE = 'https://raw.githubusercontent.com/remvze/moodist/main/public/sounds';
 
 const SOUND_URLS: Record<string, string> = {
-  brown: `${MOODIST_BASE}/brown-noise.mp3`,
+  brown: `${MOODIST_BASE}/noise/brown-noise.wav`,
+  rain: `${MOODIST_BASE}/rain/rain-on-window.mp3`,
   cute_hyper: 'synth', // Procedurally synthesized
+  drone: 'synth', // Procedurally synthesized
 };
 
 export class MultiTrackSynthesizer {
@@ -159,6 +161,40 @@ export class MultiTrackSynthesizer {
     };
   }
 
+  private startDroneSynth(volume: number): any {
+    this.initCtx();
+    if (!this.ctx) return null;
+    const ctx = this.ctx;
+    const gain = ctx.createGain();
+    const level = (vol: number) => 0.08 * vol * this.masterVolume;
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(level(volume), ctx.currentTime + 1.5);
+    gain.connect(ctx.destination);
+
+    // 432Hz with a soft octave below
+    const oscs = [216, 432].map((freq) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.connect(gain);
+      osc.start();
+      return osc;
+    });
+
+    return {
+      setVolume: (vol: number) => {
+        gain.gain.setTargetAtTime(level(vol), ctx.currentTime, 0.1);
+      },
+      stop: () => {
+        const now = ctx.currentTime;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(gain.gain.value, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.5);
+        oscs.forEach((osc) => osc.stop(now + 0.55));
+      },
+    };
+  }
+
   // --- REAL SOUNDSCAPES ---
   
   public isSoundscapeActive(type: AudioType): boolean {
@@ -186,6 +222,13 @@ export class MultiTrackSynthesizer {
   }
 
   public playSoundscape(type: AudioType, volume: number = 0.5) {
+    // Check before stopping anything, so an unsupported sound doesn't silence the current one
+    const url = SOUND_URLS[type];
+    if (!url) {
+      console.warn(`No audio URL found for soundscape ${type}`);
+      return;
+    }
+
     // Single sound stream: stop all other soundscapes before starting the new one
     [...this.activeSoundscapes.keys()].forEach((k) => {
       if (k !== type) {
@@ -198,17 +241,13 @@ export class MultiTrackSynthesizer {
       return;
     }
 
-    const url = SOUND_URLS[type];
-    if (!url) {
-      console.warn(`No audio URL found for soundscape ${type}`);
-      return;
-    }
-
     if (url === 'synth') {
       try {
         let synth: any = null;
         if (type === 'cute_hyper') {
           synth = this.startCuteHyperSynth(volume);
+        } else if (type === 'drone') {
+          synth = this.startDroneSynth(volume);
         }
         
         if (synth) {
@@ -227,7 +266,11 @@ export class MultiTrackSynthesizer {
       audio.volume = volume * this.masterVolume;
       
       audio.play().catch((err) => {
-        console.warn(`Autoplay blocked for soundscape ${type}. Will retry on next click.`, err);
+        console.warn(`Could not play soundscape ${type}.`, err);
+        // Don't leave a silent track registered as "active"
+        if (this.activeSoundscapes.get(type)?.audio === audio) {
+          this.activeSoundscapes.delete(type);
+        }
       });
 
       this.activeSoundscapes.set(type, { audio, volume });

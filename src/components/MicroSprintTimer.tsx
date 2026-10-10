@@ -4,7 +4,7 @@ import { SprintPhase, SprintConfig } from '../types';
 import { audioSynth } from '../lib/audioSynth';
 
 interface MicroSprintTimerProps {
-  onLogTask: () => void;
+  onLogTask: (title: string, durationSec?: number) => void;
   onDrainBattery: (amt: number) => void;
   activeTaskTitle?: string;
 }
@@ -86,35 +86,8 @@ export const MicroSprintTimer: React.FC<MicroSprintTimerProps> = ({ onLogTask, o
       if (deltaSecs >= 1) {
         lastTickRef.current += deltaSecs * 1000;
 
-        setTimeLeft((prev) => {
-          const newTime = prev - deltaSecs;
-          
-          if (newTime > 0) return newTime;
-
-          audioSynth.playChime();
-
-          if (phase === 'work') {
-            setPhase('rest');
-            setSprintTotalCompleted((c) => c + 1);
-
-            // Show encouragement modal
-            const messages = ENCOURAGEMENTS[selectedPreset.name] || ENCOURAGEMENTS['10 Mins Sprint'];
-            const randomMsg = messages[Math.floor(Math.random() * messages.length)];
-            const minutesSpent = Math.round(selectedPreset.workDuration / 60);
-
-            setEncouragementModal({
-              isOpen: true,
-              title: `✨ ${minutesSpent}-Minute Sprint Completed!`,
-              message: randomMsg,
-              minutesSpent,
-            });
-
-            return Math.max(0, selectedPreset.restDuration + newTime);
-          } else {
-            setPhase('work');
-            return Math.max(0, selectedPreset.workDuration + newTime);
-          }
-        });
+        // Keep the updater pure: StrictMode may call it twice, so phase changes happen in the effect below
+        setTimeLeft((prev) => Math.max(0, prev - deltaSecs));
       }
     }, 1000);
 
@@ -122,6 +95,35 @@ export const MicroSprintTimer: React.FC<MicroSprintTimerProps> = ({ onLogTask, o
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isRunning, phase, selectedPreset]);
+
+  // Advance to the next phase once the countdown reaches zero
+  useEffect(() => {
+    if (!isRunning || timeLeft > 0) return;
+
+    audioSynth.playChime();
+
+    if (phase === 'work') {
+      setPhase('rest');
+      setSprintTotalCompleted((c) => c + 1);
+
+      // Show encouragement modal
+      const messages = ENCOURAGEMENTS[selectedPreset.name] || ENCOURAGEMENTS['10 Mins Sprint'];
+      const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+      const minutesSpent = Math.round(selectedPreset.workDuration / 60);
+
+      setEncouragementModal({
+        isOpen: true,
+        title: `✨ ${minutesSpent}-Minute Sprint Completed!`,
+        message: randomMsg,
+        minutesSpent,
+      });
+
+      setTimeLeft(selectedPreset.restDuration);
+    } else {
+      setPhase('work');
+      setTimeLeft(selectedPreset.workDuration);
+    }
+  }, [timeLeft, isRunning]);
 
   const toggleTimer = () => {
     setIsRunning((prev) => !prev);
@@ -135,7 +137,7 @@ export const MicroSprintTimer: React.FC<MicroSprintTimerProps> = ({ onLogTask, o
 
   const handleLogTaskClick = () => {
     setSprintTaskCount((prev) => prev + 1);
-    onLogTask();
+    onLogTask(activeTaskTitle || 'Micro Focus Bit', selectedPreset.workDuration);
     onDrainBattery(3);
   };
 

@@ -338,7 +338,7 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
                 <span>Streak Days</span>
               </div>
               <p className="text-xl font-black font-mono text-slate-800 dark:text-slate-100">
-                {userProfile.streakDays || 1} Days
+                {userProfile.streakDays ?? 0} Days
               </p>
             </div>
 
